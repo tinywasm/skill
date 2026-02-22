@@ -18,8 +18,8 @@ type Category struct {
 type Skill struct {
 	// ID is the unique identifier for the skill.
 	ID int64 `json:"id"`
-	// CategoryID references the category this skill belongs to.
-	CategoryID int64 `json:"category_id"`
+	// Category is the name of the category this skill belongs to.
+	Category string `json:"category"`
 	// Name is the unique name of the skill, used for invocation.
 	Name string `json:"name"`
 	// Description explains what the skill does.
