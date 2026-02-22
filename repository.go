@@ -18,14 +18,67 @@ func NewStore(db *sql.DB) *Store {
 	return &Store{db: db}
 }
 
+// ListCategories lists all available categories.
+func (s *Store) ListCategories(ctx context.Context) ([]Category, error) {
+	rows, err := s.db.QueryContext(ctx, "SELECT id, name, description FROM categories ORDER BY name")
+	if err != nil {
+		return nil, fmt.Errorf("list categories: %w", err)
+	}
+	defer rows.Close()
+
+	var categories []Category
+	for rows.Next() {
+		var c Category
+		var description sql.NullString
+		if err := rows.Scan(&c.ID, &c.Name, &description); err != nil {
+			return nil, fmt.Errorf("scan category: %w", err)
+		}
+		c.Description = description.String
+		categories = append(categories, c)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate categories: %w", err)
+	}
+	return categories, nil
+}
+
+// ListSkillsByCategory lists all skills under a specific category.
+func (s *Store) ListSkillsByCategory(ctx context.Context, categoryName string) ([]Skill, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT s.id, c.name, s.name, s.description
+		FROM skills s
+		JOIN categories c ON s.category_id = c.id
+		WHERE c.name = ?
+		ORDER BY s.name
+	`, categoryName)
+	if err != nil {
+		return nil, fmt.Errorf("list skills by category: %w", err)
+	}
+	defer rows.Close()
+
+	var skills []Skill
+	for rows.Next() {
+		var skill Skill
+		if err := rows.Scan(&skill.ID, &skill.Category, &skill.Name, &skill.Description); err != nil {
+			return nil, fmt.Errorf("scan skill: %w", err)
+		}
+		skills = append(skills, skill)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate skills: %w", err)
+	}
+	return skills, nil
+}
+
 // SearchSkills searches for skills by name or description.
 // It performs a case-insensitive search using SQL LIKE operator.
 func (s *Store) SearchSkills(ctx context.Context, query string) ([]Skill, error) {
 	q := "%" + query + "%"
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, category_id, name, description
-		FROM skills
-		WHERE name LIKE ? OR description LIKE ?
+		SELECT s.id, c.name, s.name, s.description
+		FROM skills s
+		JOIN categories c ON s.category_id = c.id
+		WHERE s.name LIKE ? OR s.description LIKE ?
 	`, q, q)
 	if err != nil {
 		return nil, fmt.Errorf("search skills: %w", err)
@@ -35,7 +88,7 @@ func (s *Store) SearchSkills(ctx context.Context, query string) ([]Skill, error)
 	var skills []Skill
 	for rows.Next() {
 		var skill Skill
-		if err := rows.Scan(&skill.ID, &skill.CategoryID, &skill.Name, &skill.Description); err != nil {
+		if err := rows.Scan(&skill.ID, &skill.Category, &skill.Name, &skill.Description); err != nil {
 			return nil, fmt.Errorf("scan skill: %w", err)
 		}
 		skills = append(skills, skill)
@@ -51,9 +104,10 @@ func (s *Store) SearchSkills(ctx context.Context, query string) ([]Skill, error)
 func (s *Store) GetSkillDetail(ctx context.Context, name string) (*Skill, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT
-			s.id, s.category_id, s.name, s.description,
+			s.id, c.name, s.name, s.description,
 			p.id, p.skill_id, p.name, p.type, p.description, p.is_required
 		FROM skills s
+		JOIN categories c ON s.category_id = c.id
 		LEFT JOIN parameters p ON s.id = p.skill_id
 		WHERE s.name = ?
 	`, name)
@@ -78,7 +132,7 @@ func (s *Store) GetSkillDetail(ctx context.Context, name string) (*Skill, error)
 		)
 
 		if err := rows.Scan(
-			&skill.ID, &skill.CategoryID, &skill.Name, &skill.Description,
+			&skill.ID, &skill.Category, &skill.Name, &skill.Description,
 			&pID, &pSkillID, &pName, &pType, &pDescription, &pIsRequired,
 		); err != nil {
 			return nil, fmt.Errorf("scan skill detail: %w", err)
@@ -111,6 +165,7 @@ func (s *Store) GetSkillDetail(ctx context.Context, name string) (*Skill, error)
 // It ensures skill names are unique. If a skill with the same name exists,
 // its description, category, and parameters are updated.
 // This operation is transactional: parameters are replaced atomically with the skill update.
+// The category is auto-provisioned if it does not exist.
 func (s *Store) Register(ctx context.Context, skill Skill) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -118,8 +173,20 @@ func (s *Store) Register(ctx context.Context, skill Skill) error {
 	}
 	defer tx.Rollback()
 
-	// Upsert skill using SQLite ON CONFLICT clause.
-	// We use RETURNING id to get the ID of the inserted or updated row.
+	// 1. Upsert Category
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO categories (name, description) VALUES (?, '')
+		ON CONFLICT(name) DO NOTHING
+	`, skill.Category); err != nil {
+		return fmt.Errorf("upsert category: %w", err)
+	}
+
+	var categoryID int64
+	if err := tx.QueryRowContext(ctx, "SELECT id FROM categories WHERE name = ?", skill.Category).Scan(&categoryID); err != nil {
+		return fmt.Errorf("get category id: %w", err)
+	}
+
+	// 2. Upsert skill using SQLite ON CONFLICT clause.
 	query := `
 		INSERT INTO skills (category_id, name, description)
 		VALUES (?, ?, ?)
@@ -129,12 +196,12 @@ func (s *Store) Register(ctx context.Context, skill Skill) error {
 		RETURNING id
 	`
 	var skillID int64
-	err = tx.QueryRowContext(ctx, query, skill.CategoryID, skill.Name, skill.Description).Scan(&skillID)
+	err = tx.QueryRowContext(ctx, query, categoryID, skill.Name, skill.Description).Scan(&skillID)
 	if err != nil {
 		return fmt.Errorf("upsert skill: %w", err)
 	}
 
-	// Replace parameters: delete existing and insert new ones.
+	// 3. Replace parameters: delete existing and insert new ones.
 	_, err = tx.ExecContext(ctx, "DELETE FROM parameters WHERE skill_id = ?", skillID)
 	if err != nil {
 		return fmt.Errorf("delete parameters: %w", err)
@@ -168,11 +235,12 @@ func (s *Store) Register(ctx context.Context, skill Skill) error {
 // GetSchemaDescription returns the SQL DDL commands to create the database schema.
 // This includes tables for categories, skills, and parameters.
 // The 'skills' table enforces a UNIQUE constraint on the 'name' column.
+// The 'categories' table enforces a UNIQUE constraint on the 'name' column.
 func (s *Store) GetSchemaDescription() string {
 	return `
 CREATE TABLE categories (
     id INTEGER PRIMARY KEY,
-    name TEXT NOT NULL,
+    name TEXT NOT NULL UNIQUE,
     description TEXT
 );
 

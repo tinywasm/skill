@@ -17,8 +17,8 @@ In traditional MCP implementations, all available tools are often described in t
 
 This library empowers the LLM to **query** for skills when needed.
 
-1.  **Initial Context:** The LLM is given a brief description of the SQL schema (via `GetSchemaDescription`) and told it can query the `skills` table.
-2.  **Discovery:** When the user asks for a task (e.g., "convert this file"), the LLM writes a SQL query to find relevant skills (e.g., `SELECT * FROM skills WHERE name LIKE '%convert%'`).
+1.  **Initial Context:** The LLM is given a list of skill categories.
+2.  **Discovery:** When the user asks for a task (e.g., "convert this file"), the LLM can list skills in a relevant category or search.
 3.  **Refinement:** The LLM retrieves the specific tool definition and parameters only for the relevant skill.
 4.  **Execution:** The LLM invokes the tool.
 
@@ -28,9 +28,9 @@ This "pull" model scales to thousands of tools without impacting the initial con
 
 -   **Minimalist Design:** Relies on standard `database/sql` interfaces.
 -   **Schema-First:** Provides the exact SQL schema description for LLM prompts.
--   **Programmatic Registration:** Easy `Register` method to add or update skills programmatically with "Upsert" logic.
+-   **Programmatic Registration:** Easy `Register` method to add or update skills programmatically with "Upsert" logic and auto-provisioning of categories.
 -   **Transactional:** Ensures skill and parameter updates are atomic.
--   **Search:** Built-in SQL-based search for manual or heuristic discovery.
+-   **Search & Discovery:** Built-in methods for listing categories, listing skills by category, and SQL-based search.
 
 ## Usage
 
@@ -69,7 +69,7 @@ func main() {
 
 ### Registering Skills
 
-Use `Register` to add or update skills. It handles upserts automatically.
+Use `Register` to add or update skills. It handles upserts automatically and creates categories if they don't exist.
 
 ```go
 ctx := context.Background()
@@ -77,7 +77,7 @@ ctx := context.Background()
 mySkill := skill.Skill{
     Name:        "weather_check",
     Description: "Checks the weather for a given location",
-    CategoryID:  1, // Assuming category 1 exists
+    Category:    "Weather", // Category will be created if it doesn't exist
     Parameters: []skill.Parameter{
         {
             Name:        "location",
@@ -93,9 +93,33 @@ if err := store.Register(ctx, mySkill); err != nil {
 }
 ```
 
-### LLM Integration
+### LLM Strategy
 
-Inject the schema description into your system prompt:
+To effectively use this library with an LLM, follow this discovery flow:
+
+1.  **Orient:** Call `ListCategories` to get an overview of available domains.
+2.  **Drill Down:** Call `ListSkillsByCategory` to see specific tools within a relevant domain.
+3.  **Search (Optional):** Use `SearchSkills` if the category isn't obvious.
+4.  **Inspect:** Call `GetSkillDetail` to get the full parameter schema for a chosen skill.
+
+#### Example Flow
+
+```go
+// 1. List Categories
+categories, _ := store.ListCategories(ctx)
+// Present categories to LLM...
+
+// 2. List Skills in a Category (e.g., "Data")
+skills, _ := store.ListSkillsByCategory(ctx, "Data")
+// Present skill names/descriptions to LLM...
+
+// 3. Get Details for execution
+details, err := store.GetSkillDetail(ctx, "convert_format")
+```
+
+### SQL Integration
+
+You can also inject the schema description into your system prompt for raw SQL capabilities:
 
 ```go
 systemPrompt := "You have access to a SQL database of tools. Schema:\n" + store.GetSchemaDescription()
@@ -107,18 +131,4 @@ When the LLM generates a SQL query, execute it safely:
 // Example: LLM wants to find image tools
 query := "SELECT * FROM skills WHERE description LIKE '%image%'"
 // Execute query against db...
-```
-
-Or use the helper `SearchSkills` for simple keyword searches:
-
-```go
-skills, _ := store.SearchSkills(ctx, "image")
-```
-
-### Retrieving Details
-
-Once a skill is selected, get full details including parameters:
-
-```go
-details, err := store.GetSkillDetail(ctx, "weather_check")
 ```
