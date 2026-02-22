@@ -7,16 +7,19 @@ import (
 )
 
 // Store provides access to the skill database.
+// It manages the storage and retrieval of skills, categories, and parameters.
 type Store struct {
 	db *sql.DB
 }
 
 // NewStore creates a new Store with the given database connection.
+// It expects the database to be initialized with the schema provided by GetSchemaDescription.
 func NewStore(db *sql.DB) *Store {
 	return &Store{db: db}
 }
 
 // SearchSkills searches for skills by name or description.
+// It performs a case-insensitive search using SQL LIKE operator.
 func (s *Store) SearchSkills(ctx context.Context, query string) ([]Skill, error) {
 	q := "%" + query + "%"
 	rows, err := s.db.QueryContext(ctx, `
@@ -44,6 +47,7 @@ func (s *Store) SearchSkills(ctx context.Context, query string) ([]Skill, error)
 }
 
 // GetSkillDetail retrieves a skill with all its parameters joined.
+// It returns an error if the skill is not found.
 func (s *Store) GetSkillDetail(ctx context.Context, name string) (*Skill, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT
@@ -73,9 +77,6 @@ func (s *Store) GetSkillDetail(ctx context.Context, name string) (*Skill, error)
 			pIsRequired  sql.NullBool
 		)
 
-		// We scan skill fields every time, but they should be the same.
-		// Alternatively, we could scan them once if we knew we were on the first row.
-		// But usually we just overwrite.
 		if err := rows.Scan(
 			&skill.ID, &skill.CategoryID, &skill.Name, &skill.Description,
 			&pID, &pSkillID, &pName, &pType, &pDescription, &pIsRequired,
@@ -106,7 +107,67 @@ func (s *Store) GetSkillDetail(ctx context.Context, name string) (*Skill, error)
 	return skill, nil
 }
 
-// GetSchemaDescription returns a brief string describing the SQL schema so the LLM knows how to query the DB directly.
+// Register adds a new skill or updates an existing one by name.
+// It ensures skill names are unique. If a skill with the same name exists,
+// its description, category, and parameters are updated.
+// This operation is transactional: parameters are replaced atomically with the skill update.
+func (s *Store) Register(ctx context.Context, skill Skill) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	// Upsert skill using SQLite ON CONFLICT clause.
+	// We use RETURNING id to get the ID of the inserted or updated row.
+	query := `
+		INSERT INTO skills (category_id, name, description)
+		VALUES (?, ?, ?)
+		ON CONFLICT(name) DO UPDATE SET
+			category_id = excluded.category_id,
+			description = excluded.description
+		RETURNING id
+	`
+	var skillID int64
+	err = tx.QueryRowContext(ctx, query, skill.CategoryID, skill.Name, skill.Description).Scan(&skillID)
+	if err != nil {
+		return fmt.Errorf("upsert skill: %w", err)
+	}
+
+	// Replace parameters: delete existing and insert new ones.
+	_, err = tx.ExecContext(ctx, "DELETE FROM parameters WHERE skill_id = ?", skillID)
+	if err != nil {
+		return fmt.Errorf("delete parameters: %w", err)
+	}
+
+	if len(skill.Parameters) > 0 {
+		stmt, err := tx.PrepareContext(ctx, `
+			INSERT INTO parameters (skill_id, name, type, description, is_required)
+			VALUES (?, ?, ?, ?, ?)
+		`)
+		if err != nil {
+			return fmt.Errorf("prepare parameter insert: %w", err)
+		}
+		defer stmt.Close()
+
+		for _, p := range skill.Parameters {
+			_, err := stmt.ExecContext(ctx, skillID, p.Name, p.Type, p.Description, p.IsRequired)
+			if err != nil {
+				return fmt.Errorf("insert parameter %s: %w", p.Name, err)
+			}
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit transaction: %w", err)
+	}
+
+	return nil
+}
+
+// GetSchemaDescription returns the SQL DDL commands to create the database schema.
+// This includes tables for categories, skills, and parameters.
+// The 'skills' table enforces a UNIQUE constraint on the 'name' column.
 func (s *Store) GetSchemaDescription() string {
 	return `
 CREATE TABLE categories (
@@ -118,7 +179,7 @@ CREATE TABLE categories (
 CREATE TABLE skills (
     id INTEGER PRIMARY KEY,
     category_id INTEGER REFERENCES categories(id),
-    name TEXT NOT NULL,
+    name TEXT NOT NULL UNIQUE,
     description TEXT
 );
 

@@ -86,14 +86,6 @@ func TestGetSkillDetail(t *testing.T) {
 	}
 
 	// Check parameter details
-	p1 := skill.Parameters[0]
-	if p1.Name != "source" {
-		// Ordering is not guaranteed unless we ORDER BY in query.
-		// Let's check both or sort them.
-		// Assuming insertion order or default scan order.
-		// Let's just check existence.
-	}
-
 	foundSource := false
 	foundTarget := false
 	for _, p := range skill.Parameters {
@@ -134,5 +126,87 @@ func TestGetSchemaDescription(t *testing.T) {
 	desc := store.GetSchemaDescription()
 	if desc == "" {
 		t.Errorf("expected schema description not to be empty")
+	}
+}
+
+func TestRegister(t *testing.T) {
+	store := setupTestDB(t)
+	// Seed initial category
+	_, err := store.db.Exec(`INSERT INTO categories (id, name, description) VALUES (1, 'Test Cat', 'Test Description')`)
+	if err != nil {
+		t.Fatalf("failed to seed category: %v", err)
+	}
+
+	ctx := context.Background()
+
+	// 1. Register a new skill
+	newSkill := Skill{
+		CategoryID:  1,
+		Name:        "new_skill",
+		Description: "A new skill",
+		Parameters: []Parameter{
+			{Name: "param1", Type: "string", Description: "First parameter", IsRequired: true},
+		},
+	}
+
+	if err := store.Register(ctx, newSkill); err != nil {
+		t.Fatalf("Register failed: %v", err)
+	}
+
+	// Verify registration
+	savedSkill, err := store.GetSkillDetail(ctx, "new_skill")
+	if err != nil {
+		t.Fatalf("GetSkillDetail failed: %v", err)
+	}
+	if savedSkill.Name != "new_skill" {
+		t.Errorf("expected skill name 'new_skill', got '%s'", savedSkill.Name)
+	}
+	if savedSkill.Description != "A new skill" {
+		t.Errorf("expected description 'A new skill', got '%s'", savedSkill.Description)
+	}
+	if len(savedSkill.Parameters) != 1 {
+		t.Errorf("expected 1 parameter, got %d", len(savedSkill.Parameters))
+	}
+	if savedSkill.Parameters[0].Name != "param1" {
+		t.Errorf("expected parameter 'param1', got '%s'", savedSkill.Parameters[0].Name)
+	}
+
+	// 2. Update existing skill (upsert)
+	updatedSkill := Skill{
+		CategoryID:  1,
+		Name:        "new_skill", // Same name
+		Description: "Updated description",
+		Parameters: []Parameter{
+			{Name: "param2", Type: "int", Description: "New parameter", IsRequired: false},
+		},
+	}
+
+	if err := store.Register(ctx, updatedSkill); err != nil {
+		t.Fatalf("Register update failed: %v", err)
+	}
+
+	// Verify update
+	savedSkill, err = store.GetSkillDetail(ctx, "new_skill")
+	if err != nil {
+		t.Fatalf("GetSkillDetail failed: %v", err)
+	}
+	if savedSkill.Description != "Updated description" {
+		t.Errorf("expected description 'Updated description', got '%s'", savedSkill.Description)
+	}
+	if len(savedSkill.Parameters) != 1 {
+		t.Errorf("expected 1 parameter, got %d", len(savedSkill.Parameters))
+	}
+	if savedSkill.Parameters[0].Name != "param2" {
+		t.Errorf("expected parameter 'param2', got '%s'", savedSkill.Parameters[0].Name)
+	}
+
+	// 3. Verify uniqueness constraint directly
+	var count int
+	err = store.db.QueryRow("SELECT COUNT(*) FROM skills WHERE name = 'new_skill'").Scan(&count)
+	if err != nil {
+		t.Fatalf("failed to count skills: %v", err)
+	}
+	if count != 1 {
+		t.Errorf("expected 1 skill with name 'new_skill', got %d", count)
 	}
 }
