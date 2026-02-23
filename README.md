@@ -1,36 +1,17 @@
 # Go Skill Discovery Library
 
-A minimalist Go library for SQL-based MCP (Model Context Protocol) skill discovery and LLM context optimization.
+A high-performance, token-efficient discovery system for LLMs.
 
 ## Overview
 
-This library provides a robust mechanism for storing, discovering, and managing "skills" (tools or capabilities) that can be invoked by Large Language Models (LLMs). Instead of flooding the LLM's context window with every available tool definition, this library enables an **SQL-based Skill Discovery** pattern.
-
-### The Problem: Context Saturation
-
-In traditional MCP implementations, all available tools are often described in the system prompt. As the number of tools grows:
-1.  **Context Window Limits:** You run out of space for actual conversation history.
-2.  **Cost:** Token usage increases with every request.
-3.  **Confusion:** The LLM may hallucinate or get confused by irrelevant tools.
-
-### The Solution: SQL-Based Skill Discovery
-
-This library empowers the LLM to **query** for skills when needed.
-
-1.  **Initial Context:** The LLM is given a list of skill categories.
-2.  **Discovery:** When the user asks for a task (e.g., "convert this file"), the LLM can list skills in a relevant category or search.
-3.  **Refinement:** The LLM retrieves the specific tool definition and parameters only for the relevant skill.
-4.  **Execution:** The LLM invokes the tool.
-
-This "pull" model scales to thousands of tools without impacting the initial context size.
+This library provides a minimalist, SQL-based mechanism for LLMs to discover and invoke tools ("skills"). It is designed to minimize token usage in the initial system prompt by providing a compact index and allowing the LLM to query for details on demand.
 
 ## Features
 
--   **Minimalist Design:** Relies on standard `database/sql` interfaces.
--   **Schema-First:** Provides the exact SQL schema description for LLM prompts.
--   **Programmatic Registration:** Easy `Register` method to add or update skills programmatically with "Upsert" logic and auto-provisioning of categories.
--   **Transactional:** Ensures skill and parameter updates are atomic.
--   **Search & Discovery:** Built-in methods for listing categories, listing skills by category, and SQL-based search.
+-   **Token-Efficient Index:** `GetIndex()` returns a highly compact string (e.g., `files(read,write), net(ping)`) for the initial context.
+-   **SQL-Based Discovery:** LLMs can query the `catalog` view to retrieve detailed parameter schemas only when needed.
+-   **Idempotent Registration:** `Register()` handles upserts and auto-provisions categories.
+-   **Minimalist Schema:** Uses `cats`, `skills`, `params` tables and a `catalog` view.
 
 ## Usage
 
@@ -42,7 +23,7 @@ go get github.com/tinywasm/skill
 
 ### Initialization
 
-Initialize the store with any `*sql.DB` connection (e.g., SQLite).
+Initialize the store with any `*sql.DB` connection (e.g., `modernc.org/sqlite`).
 
 ```go
 package main
@@ -50,14 +31,15 @@ package main
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"log"
 
 	"github.com/tinywasm/skill"
-	_ "modernc.org/sqlite" // or any other driver
+	_ "modernc.org/sqlite"
 )
 
 func main() {
-	db, _ := sql.Open("sqlite", "skills.db")
+	db, _ := sql.Open("sqlite", ":memory:") // or file path
 	store := skill.NewStore(db)
 
 	// Initialize schema
@@ -69,66 +51,62 @@ func main() {
 
 ### Registering Skills
 
-Use `Register` to add or update skills. It handles upserts automatically and creates categories if they don't exist.
-
 ```go
 ctx := context.Background()
 
 mySkill := skill.Skill{
-    Name:        "weather_check",
-    Description: "Checks the weather for a given location",
-    Category:    "Weather", // Category will be created if it doesn't exist
+    Category: "weather",
+    Name:     "check",
+    Info:     "Get current weather",
     Parameters: []skill.Parameter{
-        {
-            Name:        "location",
-            Type:        "string",
-            Description: "City name or coordinates",
-            IsRequired:  true,
-        },
+        {Name: "city", Type: "string", Info: "City name", Required: true},
     },
 }
 
 if err := store.Register(ctx, mySkill); err != nil {
-    log.Printf("Failed to register skill: %v", err)
+    log.Fatal(err)
 }
 ```
 
-### LLM Strategy
+### LLM Integration
 
-To effectively use this library with an LLM, follow this discovery flow:
+#### 1. Initial Context
 
-1.  **Orient:** Call `ListCategories` to get an overview of available domains.
-2.  **Drill Down:** Call `ListSkillsByCategory` to see specific tools within a relevant domain.
-3.  **Search (Optional):** Use `SearchSkills` if the category isn't obvious.
-4.  **Inspect:** Call `GetSkillDetail` to get the full parameter schema for a chosen skill.
-
-#### Example Flow
+Inject the compact index and instructions into your system prompt.
 
 ```go
-// 1. List Categories
-categories, _ := store.ListCategories(ctx)
-// Present categories to LLM...
+index, _ := store.GetIndex(ctx)
+// index example: "weather(check), files(read,write)"
 
-// 2. List Skills in a Category (e.g., "Data")
-skills, _ := store.ListSkillsByCategory(ctx, "Data")
-// Present skill names/descriptions to LLM...
-
-// 3. Get Details for execution
-details, err := store.GetSkillDetail(ctx, "convert_format")
+systemPrompt := fmt.Sprintf(skill.LLMInstruction, index)
 ```
 
-### SQL Integration
+The `skill.LLMInstruction` constant provides the standard prompt:
 
-You can also inject the schema description into your system prompt for raw SQL capabilities:
+> "Available: [INDEX]. Query catalog table for args schema. Example: SELECT args FROM catalog WHERE name='read';"
+
+#### 2. Skill Discovery
+
+When the LLM needs to use a tool, it can query the `catalog` view or you can use `Search()` programmatically.
 
 ```go
-systemPrompt := "You have access to a SQL database of tools. Schema:\n" + store.GetSchemaDescription()
+// Programmatic search
+skills, _ := store.Search(ctx, "weather")
 ```
 
-When the LLM generates a SQL query, execute it safely:
+#### 3. Execution
 
-```go
-// Example: LLM wants to find image tools
-query := "SELECT * FROM skills WHERE description LIKE '%image%'"
-// Execute query against db...
+The LLM can query for the arguments schema directly:
+
+```sql
+SELECT args FROM catalog WHERE name='check';
 ```
+
+Returns JSON: `[{"n":"city","t":"string","r":true,"d":"City name"}]`
+
+## Schema
+
+-   **cats**: `id`, `name` (unique)
+-   **skills**: `id`, `cat_id`, `name` (unique), `info`
+-   **params**: `id`, `skill_id`, `name`, `type`, `info`, `req`
+-   **catalog** (VIEW): `cat`, `name`, `info`, `args` (JSON array of parameters)
