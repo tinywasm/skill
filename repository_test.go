@@ -2,14 +2,13 @@ package skill
 
 import (
 	"context"
-	"database/sql"
 	"testing"
 
-	_ "modernc.org/sqlite"
+	"github.com/tinywasm/sqlite"
 )
 
 func setupTestDB(t *testing.T) *Store {
-	db, err := sql.Open("sqlite", ":memory:")
+	db, err := sqlite.Open(":memory:")
 	if err != nil {
 		t.Fatalf("failed to open db: %v", err)
 	}
@@ -17,9 +16,30 @@ func setupTestDB(t *testing.T) *Store {
 
 	store := NewStore(db)
 
-	schema := store.GetSchemaDescription()
-	if _, err := db.Exec(schema); err != nil {
-		t.Fatalf("failed to create schema: %v", err)
+	if err := db.CreateTable(&cat{}); err != nil {
+		t.Fatalf("failed to create cats table: %v", err)
+	}
+	if err := db.CreateTable(&skillModel{}); err != nil {
+		t.Fatalf("failed to create skills table: %v", err)
+	}
+	if err := db.CreateTable(&paramModel{}); err != nil {
+		t.Fatalf("failed to create params table: %v", err)
+	}
+
+	view := `
+CREATE VIEW catalog AS
+SELECT
+    c.name AS cat,
+    s.name AS name,
+    s.info AS info,
+    (SELECT json_group_array(
+        json_object('n', p.name, 't', p.type, 'r', CASE WHEN p.req THEN json('true') ELSE json('false') END, 'd', p.info)
+    ) FROM params p WHERE p.skill_id = s.id) AS args
+FROM skills s
+JOIN cats c ON s.cat_id = c.id;
+`
+	if err := db.RawExecutor().Exec(view); err != nil {
+		t.Fatalf("failed to create catalog view: %v", err)
 	}
 
 	return store
