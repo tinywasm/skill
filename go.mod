@@ -4,8 +4,8 @@ go 1.25.2
 
 require (
 	github.com/tinywasm/json v0.1.7
-	github.com/tinywasm/orm v0.2.3
-	github.com/tinywasm/sqlite v0.1.3
+	github.com/tinywasm/orm v0.2.4
+	github.com/tinywasm/sqlite v0.1.9
 )
 
 require (
