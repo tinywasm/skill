@@ -12,12 +12,12 @@ github.com/ncruces/go-strftime v1.0.0 h1:HMFp8mLCTPp341M/ZnA4qaf7ZlsbTc+miZjCLOF
 github.com/ncruces/go-strftime v1.0.0/go.mod h1:Fwc5htZGVVkseilnfgOVb9mKy6w1naJmn9CehxcKcls=
 github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec h1:W09IVJc94icq4NjY3clb7Lk8O1qJ8BdBEF8z0ibU0rE=
 github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec/go.mod h1:qqbHyh8v60DhA7CoWK5oRCqLrMHRGoxYCSS9EjAz6Eo=
-github.com/tinywasm/fmt v0.18.9 h1:M8t54VnB6ZBbxph9AF3vbmda366MIlGKRw48SKAdCfA=
-github.com/tinywasm/fmt v0.18.9/go.mod h1:L2GCAi6asgytPV6TVvGrRq5Ml+DkUt1Ijo5i/2J1jOY=
+github.com/tinywasm/fmt v0.18.12 h1:Von8ovka9CI/g687MoEovtqENxa/IBZd6e8lplwdgEE=
+github.com/tinywasm/fmt v0.18.12/go.mod h1:L2GCAi6asgytPV6TVvGrRq5Ml+DkUt1Ijo5i/2J1jOY=
 github.com/tinywasm/json v0.1.7 h1:/tLcf6qHxEi442S93eLtqtGS9kySMR5Iyi0WHP4TUf4=
 github.com/tinywasm/json v0.1.7/go.mod h1:hq39O+4001Cmiau6NP7B/qVsVy7P7C5MIlI6KUWEa5I=
-github.com/tinywasm/orm v0.2.4 h1:8AGW6lhVzPT6Pm0oDIY+dIiDNUPaBscrhF7QBpujVp4=
-github.com/tinywasm/orm v0.2.4/go.mod h1:qFyB/t+maZPwXq65FysOoo4QrjDh68nCWy90lh0a5KM=
+github.com/tinywasm/orm v0.2.7 h1:6dE8p4tFtByM20d0EuW7+9JFzJgNkmpagp2+yHKC8pE=
+github.com/tinywasm/orm v0.2.7/go.mod h1:tOfI/eqPT4bqvuN9VdRL5ybeX00WMR7NT+hEim0ZzV4=
 github.com/tinywasm/sqlite v0.1.9 h1:6lKVcOOk1c2OEAHNhngw+CMF1v/H8S4rwt9JcEPZClo=
 github.com/tinywasm/sqlite v0.1.9/go.mod h1:KFdlrkPhKorFbMms0pC2MmHY9GYnYWzzd99vOAbyqg4=
 golang.org/x/mod v0.32.0 h1:9F4d3PHLljb6x//jOyokMv3eX+YDeepZSEo3mFJy93c=
